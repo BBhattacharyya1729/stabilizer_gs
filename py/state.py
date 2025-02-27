@@ -8,6 +8,27 @@ type_index = tp.Tuple[int, int]
 tot_count = 0
 
 
+def unravel_index(index, shapes):
+    sizes = np.array([np.prod(shape) for shape in shapes])
+    cumsum = np.cumsum(sizes)
+    lst_index = np.sum(cumsum <= index)
+    left_index = index - (cumsum[lst_index - 1] if lst_index > 0 else 0)
+    array_index = np.unravel_index(left_index, shapes[lst_index])
+    return lst_index, array_index
+
+
+def generate_gs(state_list, paulis, nexts):
+    Es_all = [state.stab.energy_level.Es for state in state_list]
+    shapes = [item.shape for item in Es_all]
+    indices_all = np.argsort(np.concatenate([item.flatten() for item in Es_all]))[0:nexts]
+    result = []
+    for index in indices_all:
+        state_index, array_index = unravel_index(index, shapes)
+        level = state_list[state_index].stab.energy_level
+        result.append(level.get_state(array_index, paulis))
+    return result
+
+
 class Hamiltonian:
     def __init__(self, n, k):
         '''
@@ -88,7 +109,7 @@ def update_dict(d, items, merge_func):
 class FullStateEnergies:
     def __init__(self, paulis: tp.List[tp.Tuple[Pauli, float]]):
         n = np.max([p.end for p, w in paulis])
-        self.stab = StabilizerGroupEnergies.empty(0, n)
+        self.stab = StabilizerGroupEnergies.empty(0, n, nexts=1)
         self.paulis = paulis
         self.excluded_paulis = []
 
@@ -122,6 +143,9 @@ class FullStateEnergies:
         return self
 
     def evolve(self):
+        '''
+        not used
+        '''
         state = self.copy()
         states = [state]
         while True:
@@ -138,13 +162,29 @@ class FullStateEnergies:
                 new_states.append(state.exclude_pauli(P))
             states = new_states
             print('number of states', len(states))
-        states
+        self.states = states
+        '''
         index_state = np.argmin([np.min(state.stab.energy_level.Es) for state in states])
         state_gs = states[index_state]
         energy_level = state_gs.stab.energy_level
         index_sign = np.unravel_index(np.argmin(energy_level.Es), energy_level.Es.shape)
         phase = 1 - np.array(index_sign) * 2
         return state_gs.stab.Ps * phase, energy_level.Es[index_sign]
+        '''
+
+    def generate_gs(self, nexts):
+        Es_all = [state.stab.energy_level.Es for state in self.states]
+        shapes = [item.shape for item in Es_all]
+        indices_all = np.argsort(np.concatenate([item.flatten() for item in Es_all]))[0:nexts]
+        result = []
+        for index in indices_all:
+            state_index, array_index = unravel_index(index, shapes)
+            stab = self.states[state_index].stab
+            level = stab.energy_level
+            index_sign = array_index[1:]
+            phase = 1 - np.array(index_sign) * 2
+            result.append((stab.Ps * phase, level.Es[array_index]))
+        return result
 
 
 class State:
@@ -169,14 +209,15 @@ class State:
     proof:
     1. if Sright' is valid, then Sright is valid
     '''
-    def __init__(self, hamiltonian: Hamiltonian, Sright, n=None):
-        self.n = hamiltonian.n
+    def __init__(self, hamiltonian: Hamiltonian, Sright, n=None, nexts=1):
         self.k = hamiltonian.k
         self.hamiltonian = hamiltonian
         self.m = 0
         if n is None:
             n = hamiltonian.n
-        self.stab = StabilizerGroupEnergies.empty(0, n)
+        self.n = n
+        self.nexts = nexts
+        self.stab = StabilizerGroupEnergies.empty(0, self.n, nexts)
         #self.valid_pauli_indices: tp.Dict[int, tp.List[int]] = {qlast: list(range(len(self.hamiltonian.paulis[qlast]))) for qlast in range(self.n)}
         self.invalid_pauli_indices: tp.Dict[int, tp.List[int]] = {qlast: [] for qlast in range(self.n)}
         self.Sright = Sright
@@ -219,7 +260,7 @@ class State:
 
     def copy(self) -> "State":
         from copy import deepcopy
-        result = State(self.hamiltonian, self.Sright)
+        result = State(self.hamiltonian, self.Sright, n=self.n, nexts=self.nexts)
         result.m = self.m
         result.stab = self.stab.copy()
         result.invalid_pauli_indices = deepcopy(self.invalid_pauli_indices)
@@ -326,16 +367,17 @@ class State:
 
 
 class StateMachine:
-    def __init__(self, hamiltonian: Hamiltonian, Sright_all):
+    def __init__(self, hamiltonian: Hamiltonian, Sright_all, nexts=1):
         self.n = hamiltonian.n
         self.k = hamiltonian.k
         self.m = 0
+        self.nexts = nexts
         self.hamiltonian = hamiltonian
         self.state_dict = {}
         self.Sright_all = Sright_all
         Srights, _ = Sright_all[0]
         for Sright in Srights.values():
-            state = State(hamiltonian, Sright)
+            state = State(hamiltonian, Sright, nexts=nexts)
             self.state_dict[hash(state)] = state
 
     def evolve_single(self, raw_state: State):
@@ -379,6 +421,9 @@ class StateMachine:
     def generate_gs(self):
         # find state & signs with the lowest energy
         state_list = list(self.state_dict.values())
+        return generate_gs(state_list, self.hamiltonian.original_paulis, self.nexts)
+        '''
+        state_list = list(self.state_dict.values())
         index_state = np.argmin([np.min(state.stab.energy_level.Es) for state in state_list])
         self.state_gs = state_list[index_state]
         level_gs = self.state_gs.stab.energy_level
@@ -388,30 +433,27 @@ class StateMachine:
         Ps_index = level_gs.Ps_indices[self.index_sign][0:nPs]
         sign_index = level_gs.Ps_signs[self.index_sign][0:nPs]
         Ps = []
-        '''
-        for this_qlast, this_index, sign in zip(Ps_index % self.n, Ps_index // self.n, sign_index):
-            P = self.hamiltonian.paulis[this_qlast][this_index][0]
-            Ps.append(P * sign)
-        '''
         for index, sign in zip(Ps_index, sign_index):
             P, _ = self.hamiltonian.original_paulis[index]
             Ps.append(P * sign)
         self.stab_gs = StabilizerGroup(Pauli.stack(Ps))
+        '''
 
 
 class StateMachinePeriodic:
-    def __init__(self, hamiltonian: Hamiltonian, Sright_all):
+    def __init__(self, hamiltonian: Hamiltonian, Sright_all, nexts=1):
         self.n = hamiltonian.n
         self.k = hamiltonian.k
         self.l = self.n - self.k + 1
         self.m = 0
+        self.nexts = nexts
         self.hamiltonian = hamiltonian
         self.state_dict = {}
         self.Sright_all = Sright_all
         Srights, _ = Sright_all[0]
         for Sright in Srights.values():
             # in case of error increase the 3 here
-            state = State(hamiltonian, Sright, n=hamiltonian.n + self.l * 3)
+            state = State(hamiltonian, Sright, n=hamiltonian.n + self.l * 3, nexts=nexts)
             self.state_dict[hash(state)] = state
 
     def evolve_single(self, raw_state: State):
@@ -455,11 +497,15 @@ class StateMachinePeriodic:
     def generate_gs(self):
         # find state & signs with the lowest energy
         state_list = list(self.state_dict.values())
+        return generate_gs(state_list, self.hamiltonian.original_paulis, self.nexts)
+        '''
+        state_list = list(self.state_dict.values())
         index_state = np.argmin([np.min(state.stab.energy_level.Es) for state in state_list])
         self.state_gs = state_list[index_state]
         level_gs = self.state_gs.stab.energy_level
         index_sign = np.unravel_index(np.argmin(level_gs.Es), level_gs.Es.shape)
         self.stab_gs, self.energy_gs = level_gs.get_state(index_sign, self.hamiltonian.original_paulis)
+        '''
 
 
 type_branch = tp.Tuple[StabilizerGroup, tp.List[Pauli]]

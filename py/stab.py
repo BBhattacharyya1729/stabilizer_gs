@@ -174,38 +174,48 @@ class StabilizerGroup:
 
 
 class EnergyLevel:
-    def __init__(self, Es, nPs, Ps_indices, Ps_signs):
+    def __init__(self, Es, nPs, Ps_indices, Ps_signs, nexts):
         self.Es = Es
         self.nPs = nPs
         self.Ps_indices = Ps_indices
         self.Ps_signs = Ps_signs
+        self.nexts = nexts
 
     @property
     def m(self):
-        return self.Es.ndim
+        return self.Es.ndim - 1
 
     @classmethod
-    def empty(cls, nmax):
-        Es = np.zeros(())
-        nPs = np.zeros((), dtype=inttype)
-        Ps_indices = np.zeros((nmax, ), dtype=inttype) - 1
-        Ps_signs = np.zeros((nmax, ), dtype=inttype)
-        return EnergyLevel(Es, nPs, Ps_indices, Ps_signs)
+    def empty(cls, nmax, nexts):
+        Es = np.zeros((1, ))
+        nPs = np.zeros((1, ), dtype=inttype)
+        Ps_indices = np.zeros((1, nmax), dtype=inttype) - 1
+        Ps_signs = np.zeros((1, nmax), dtype=inttype)
+        return EnergyLevel(Es, nPs, Ps_indices, Ps_signs, nexts)
+
+    def is_good(self):
+        same = np.diff(self.Ps_indices, axis=-1) == 0
+        return np.all(self.Ps_indices[np.where(same)] == -1)
 
     def flip_sign(self, index):
-        tmp_index = [slice(None) for _ in range(self.m)]
-        tmp_index[index] = slice(None, None, -1)
+        all = slice(None)
+        tmp_index = [all for _ in range(self.m + 1)]
+        tmp_index[index + 1] = slice(None, None, -1)
         self.Es = self.Es[tuple(tmp_index)]
         self.nPs = self.nPs[tuple(tmp_index)]
         self.Ps_indices = self.Ps_indices[tuple(tmp_index)]
         self.Ps_signs = self.Ps_signs[tuple(tmp_index)]
+        assert self.is_good()
 
     def copy(self):
-        return EnergyLevel(self.Es.copy(), self.nPs.copy(), self.Ps_indices.copy(), self.Ps_signs.copy())
+        return EnergyLevel(self.Es.copy(), self.nPs.copy(), self.Ps_indices.copy(), self.Ps_signs.copy(), self.nexts)
 
     def transform(self, U):
+        all = slice(None)
         indices = self.get_indices()
         indices_transform = U.dot(indices) % 2
+        indices = [all] + indices.tolist()
+        indices_transform = [all] + indices_transform.tolist()
 
         Es = np.zeros_like(self.Es)
         Es[tuple(indices_transform)] = self.Es[tuple(indices)]
@@ -222,9 +232,12 @@ class EnergyLevel:
         Ps_signs = np.zeros_like(self.Ps_signs)
         Ps_signs[tuple(indices_transform)] = self.Ps_signs[tuple(indices)]
         self.Ps_signs = Ps_signs
+        assert self.is_good()
 
     def add(self, index=-1):
-        indices = np.indices((2, ) * self.m)
+        indices = np.indices(self.Es.shape)
+        if index >= 0:
+            assert not np.any(self.Ps_indices == index)
         self.Ps_indices[tuple(indices) + (self.nPs, )] = index
         Ps_signs1 = self.Ps_signs.copy()
         Ps_signs2 = self.Ps_signs.copy()
@@ -236,33 +249,21 @@ class EnergyLevel:
         self.nPs = np.stack([self.nPs, self.nPs], axis=-1)
         self.Ps_indices = np.stack([self.Ps_indices, self.Ps_indices], axis=-2)
         self.Ps_signs = np.stack([Ps_signs1, Ps_signs2], axis=-2)
+        assert self.is_good()
 
     def project_to_next(self):
-        level1 = EnergyLevel(self.Es[0], self.nPs[0], self.Ps_indices[0], self.Ps_signs[0])
-        level2 = EnergyLevel(self.Es[1], self.nPs[1], self.Ps_indices[1], self.Ps_signs[1])
+        level1 = EnergyLevel(self.Es[:, 0], self.nPs[:, 0], self.Ps_indices[:, 0], self.Ps_signs[:, 0], self.nexts)
+        level2 = EnergyLevel(self.Es[:, 1], self.nPs[:, 1], self.Ps_indices[:, 1], self.Ps_signs[:, 1], self.nexts)
         return EnergyLevel.merge_gs(level1, level2)
-        '''
-        argmin = np.argmin(self.Es, axis=0)
-        indices = np.indices((2, ) * (self.m - 1))
-        index = (argmin, ) + tuple(indices)
-        self.Es = self.Es[index]
-        self.nPs = self.nPs[index]
-        self.Ps_indices = self.Ps_indices[index]
-        self.Ps_signs = self.Ps_signs[index]
-        '''
-
-    '''
-    @classmethod
-    def project_multiple_to_next(cls, states: tp.List["EnergyLevel"]) -> tp.List["EnergyLevel"]:
-        #return functools.reduce(EnergyLevel.merge_gs, states)
-    '''
 
     def get_indices(self):
         return np.indices((2, ) * self.m).reshape(self.m, 2**self.m)
 
     def add_energy(self, x, sign, w):
+        all = slice(None)
         indices = self.get_indices()
         signs = (1 - (x.dot(indices) % 2) * 2) * sign
+        indices = [all] + indices.tolist()
         self.Es[tuple(indices)] += signs * w
 
     @classmethod
@@ -270,14 +271,28 @@ class EnergyLevel:
         '''
         Use the lower energy as the energy of the merged state
         '''
-        keep1 = state1.Es < state2.Es
-        keep2 = ~keep1
-        #Es_ref = np.min([state1.Es, state2.Es], axis=0)
-        Es = state1.Es * keep1 + state2.Es * keep2
-        nPs = state1.nPs * keep1 + state2.nPs * keep2
-        Ps_indices = state1.Ps_indices * keep1[..., None] + state2.Ps_indices * keep2[..., None]
-        Ps_signs = state1.Ps_signs * keep1[..., None] + state2.Ps_signs * keep2[..., None]
-        return cls(Es, nPs, Ps_indices, Ps_signs)
+        assert state1.nexts == state2.nexts
+        assert state1.is_good()
+        assert state2.is_good()
+        nexts = state1.nexts
+        Es_all = np.concatenate([state1.Es, state2.Es], axis=0)
+        sort_indices = np.argsort(Es_all, axis=0)[0:nexts]
+        other_shape = state1.Es.shape[1:]
+        other_indices = np.indices(other_shape)
+
+        merge = lambda x, y: np.concatenate([x, y], axis=0)[(sort_indices, ) + tuple(other_indices[:, None])]
+
+        Es = merge(state1.Es, state2.Es)
+        nPs = merge(state1.nPs, state2.nPs)
+        Ps_indices = merge(state1.Ps_indices, state2.Ps_indices)
+        Ps_signs = merge(state1.Ps_signs, state2.Ps_signs)
+        #Es = state1.Es * keep1 + state2.Es * keep2
+        #nPs = state1.nPs * keep1 + state2.nPs * keep2
+        #Ps_indices = state1.Ps_indices * keep1[..., None] + state2.Ps_indices * keep2[..., None]
+        #Ps_signs = state1.Ps_signs * keep1[..., None] + state2.Ps_signs * keep2[..., None]
+        result = cls(Es, nPs, Ps_indices, Ps_signs, nexts)
+        assert result.is_good()
+        return result
 
     def clear(self):
         self.Es = np.full_like(self.Es, 0)
@@ -324,11 +339,11 @@ class StabilizerGroupEnergies(StabilizerGroup):
         assert np.all(self.Ps.phase == 1)
 
     @classmethod
-    def empty(cls, nqubits, nmax, begin=0):
+    def empty(cls, nqubits, nmax, nexts, begin=0):
         z = np.zeros((0, nqubits), dtype=inttype)
         x = np.zeros((0, nqubits), dtype=inttype)
         Ps = Pauli(z, x, begin=begin)
-        energy_level = EnergyLevel.empty(nmax)
+        energy_level = EnergyLevel.empty(nmax, nexts)
         return StabilizerGroupEnergies(Ps, energy_level)
 
     def range(self, begin, end, allow_truncation=False):

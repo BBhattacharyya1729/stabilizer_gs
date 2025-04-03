@@ -110,7 +110,7 @@ class Pauli:
         return cls(Z, X, begin=begin)
 
     def to_string(self):
-        array4 = np.array(['I', 'X', 'Z', 'Y'])[self.array4]
+        array4 = np.array(['_', 'X', 'Z', 'Y'])[self.array4]
         phase = np.array(['+', '-'])[(1 - self.phase) // 2]
         title = f'qubit {self.begin}-{self.end-1} size {self.batch_size} '
         if np.prod(self.batch_size) == 0:

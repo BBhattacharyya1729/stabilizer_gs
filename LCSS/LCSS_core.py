@@ -1117,7 +1117,6 @@ def extend_group(L, p_list,n):
     fail = False
     while(len(L_new) < n):
         space = __commuting_space__(stabilizer_group.__pauli_list_to_arr__(L_new)).T
-        print("Space Size: ",len(space))
         for idx in range(1,2**(len(space))):
             s = __bin_to_paulis__(__enumerate_span__(space,idx))
             if(not __extra_overlap__(L_new,s,p_list) and __indepenent__(L_new,s)):
@@ -1139,7 +1138,7 @@ def __stab_to_str__(stab,n_qubits):
     s2 = (n_qubits - stab.end) * "_"
     return [s1+"".join(i)+s2 for i in np.array(['_', 'X', 'Z', 'Y'])[stab.Ps.array4]]
 
-def __get_excited_states__(sparseH,nexts):
+def get_excited_states(sparseH,nexts):
     Sright_all = generate_Sright_all(sparseH)
     lists = []
 
@@ -1159,14 +1158,14 @@ def __get_excited_states__(sparseH,nexts):
     
     return result, groups, phases, energies 
 
-def __get_circs__(groups,phases,H):
+def get_circs(groups,phases,H):
     groups = [extend_group(g,H.paulis,len(H.paulis[0])) for g in groups]
     groups  = [g[0] for g in groups if not g[1]]
     circs = H.__groups_to_circs__(zip(groups,phases))
     return circs
 
 def LCSS_full(H,n):
-    result,groups,phases,energies = __get_excited_states__(H.convert_to_spare_hamiltonian(),n)
-    circs = __get_circs__(groups,phases,H)
-    return H.LCSS_opt(circs)
+    result,groups,phases,energies = get_excited_states(H.convert_to_spare_hamiltonian(),n)
+    circs = get_circs(groups,phases,H)
+    return H.LCSS_opt(circs),circs,groups
 

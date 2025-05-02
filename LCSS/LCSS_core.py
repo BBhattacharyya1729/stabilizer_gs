@@ -1,6 +1,9 @@
 import numpy as np 
 from py.state import Hamiltonian, StateMachine, generate_Sright_all
 from py.pauli import Pauli
+from joblib import Parallel, delayed
+import numpy as np
+
 ###RREF methods
 def __swap_rows__(A,i,j):
     """
@@ -742,16 +745,14 @@ class CHform():
         oldG,oldF,oldM,oldg,oldv,olds = self.__copy_data__()
         
         if(left):
-            for p in range(self.n):
-                self.M[q,p] = (oldM[q,p] + oldG[q,p]) % 2
+            self.M[q] = (oldM[q] + oldG[q]) % 2
             self.g[q] = (oldg[q]-1)%4
             self.control_circ.S(q)
  
             
         else:
-            for p in range(self.n):
-                self.M[p,q] = (oldM[p,q] + oldF[p,q]) % 2
-                self.g[p] = (oldg[p]-oldF[p,q]) % 4
+            self.M[:,q] = (oldM[:,q] + oldF[:,q]) % 2
+            self.g = (oldg-oldF[:,q]) % 4
         
         
     def CZ(self,q,r,left=True):
@@ -766,18 +767,14 @@ class CHform():
         oldG,oldF,oldM,oldg,oldv,olds = self.__copy_data__()
         
         if(left):
-            for p in range(self.n):
-                self.M[q,p] = (oldM[q,p]+oldG[r,p])%2
-                self.M[r,p] = (oldM[r,p]+oldG[q,p])%2
+            self.M[q] = (oldM[q]+oldG[r])%2
+            self.M[r] = (oldM[r]+oldG[q])%2
             self.control_circ.CZ(q,r)
         else:
-            for p in range(self.n):
-                self.M[p,q] = (oldM[p,q]+oldF[p,r]) % 2
-                self.M[p,r] = (oldM[p,r]+oldF[p,q]) % 2
-                self.g[p] = (oldg[p]+ 2 * oldF[p,q]  * oldF[p,r]) % 4
+            self.M[:,q] = (oldM[:,q]+oldF[:,r]) % 2
+            self.M[:,r] = (oldM[:,r]+oldF[:,q]) % 2
+            self.g = (oldg+ 2 * oldF[:,q]  * oldF[:,r]) % 4
 
-        
-              
     def CX(self,q,r,left=True):
         """
         Apply CX gate
@@ -790,18 +787,16 @@ class CHform():
         oldG,oldF,oldM,oldg,oldv,olds = self.__copy_data__()
         
         if(left):
-            for p in range(self.n):
-                self.G[r,p] = (oldG[r,p]+oldG[q,p]) % 2
-                self.F[q,p] = (oldF[q,p]+oldF[r,p]) % 2
-                self.M[q,p] = (oldM[q,p]+oldM[r,p]) % 2
+            self.G[r] = (oldG[r]+oldG[q]) % 2
+            self.F[q] = (oldF[q]+oldF[r]) % 2
+            self.M[q] = (oldM[q]+oldM[r]) % 2
             self.g[q] = (oldg[q]+oldg[r]+2*(oldM @ oldF.T)[q,r]) % 4
             self.control_circ.CX(q,r)
 
         else:
-            for p in range(self.n):
-                self.G[p,q] = (oldG[p,q] +oldG[p,r]) % 2
-                self.F[p,r] = (oldF[p,r]+oldF[p,q]) % 2
-                self.M[p,q] = (oldM[p,q]+oldM[p,r]) % 2
+            self.G[:,q] = (oldG[:,q] +oldG[:,r]) % 2
+            self.F[:,r] = (oldF[:,r]+oldF[:,q]) % 2
+            self.M[:,q] = (oldM[:,q]+oldM[:,r]) % 2
                 
 
         
@@ -1001,6 +996,42 @@ class Pauli_Hamiltonian():
         output = output+output.conjugate().T + np.diag(np.ones(len(output)))
                 
         return output 
+    
+    
+    @staticmethod
+    def __p_overlap_elements__(circs):
+        """
+        Find overlap elements
+
+        Args:
+            circs (list[circuit instruct]): circuits for each state
+
+        Returns:
+            np.array[complex]: Overlap matrix with O_ij = <s_i | s_j>
+        """
+        n = len(circs)
+        output = np.zeros((n, n), dtype=complex)
+
+        # Define task
+        def compute_overlap(i, j):
+            return i, j, CHform.inner(circs[i], circs[j])
+
+        # Parallel computation over upper triangle (i < j)
+        results = Parallel(n_jobs=-1)(
+            delayed(compute_overlap)(i, j)
+            for i in range(n)
+            for j in range(i + 1, n)
+        )
+
+        # Fill the output matrix
+        for i, j, val in results:
+            output[i, j] = val
+
+        # Complete the Hermitian matrix
+        output = output + output.conjugate().T + np.diag(np.ones(n))
+        
+        return output
+    
 
     @staticmethod
     def __pauli_elements__(circs,p):
@@ -1020,6 +1051,41 @@ class Pauli_Hamiltonian():
                 if(i != j):
                     output[j,i] = output[i,j].conjugate()
         return output
+    
+    
+    @staticmethod
+    def __p_pauli_elements__(circs, p):
+        """
+        Find pauli matrix elements
+
+        Args:
+            circs (list[circuit instruct]): circuits for each state
+
+        Returns:
+            np.array[complex]: pauli matrix with P_ij = <s_i | P | s_j>
+        """
+        n = len(circs)
+        output = np.zeros((n, n), dtype=complex)
+
+        # Task for parallel execution
+        def compute_pauli_element(i, j):
+            val = CHform.pauli_matrix_element(circs[i], circs[j], p)
+            return (i, j, val)
+
+        # Parallel computation over upper triangle (i <= j)
+        results = Parallel(n_jobs=-1)(
+            delayed(compute_pauli_element)(i, j)
+            for i in range(n)
+            for j in range(i, n)
+        )
+
+        # Fill the output matrix
+        for i, j, val in results:
+            output[i, j] = val
+            if i != j:
+                output[j, i] = val.conjugate()
+
+        return output
 
     def __total_elements__(self, circs):
         """
@@ -1033,7 +1099,22 @@ class Pauli_Hamiltonian():
         """
         pauli_elements = [Pauli_Hamiltonian.__pauli_elements__(circs,p) for p in self.paulis]
         return np.einsum("ijk,i->jk",pauli_elements,self.coeffs)
-            
+    
+    def __p_total_elements__(self, circs):
+        """
+        Find full matrix elements
+
+        Args:
+            circs (list[circuit instruct]): circuits for each state
+
+        Returns:
+            np.array[complex]: matrix with M_ij = <s_i | H | s_j>
+        """
+        pauli_elements = Parallel(n_jobs=-1)(
+            delayed(Pauli_Hamiltonian.__pauli_elements__)(circs, p) 
+            for p in self.paulis
+        )
+        return np.einsum("ijk,i->jk", pauli_elements, self.coeffs)
             
     def LCSS_opt(self, circs):
         """
@@ -1047,6 +1128,23 @@ class Pauli_Hamiltonian():
         """
         O = Pauli_Hamiltonian.__overlap_elements__(circs)
         M = self.__total_elements__(circs)
+        L = np.linalg.cholesky(O+1e-14 * np.eye(len(O))).conjugate().T
+
+        U = np.linalg.inv(L).conjugate().T @ M @ np.linalg.inv(L)
+        return np.linalg.eigvalsh(U)[0],np.linalg.inv(L) @ np.linalg.eigh(U)[1][:,0]
+    
+    def p_LCSS_opt(self, circs):
+        """
+        Optimize over linear combination of stabilizer states
+
+        Args:
+            circs (list[circuit instruct]): list of circuits for each state
+
+        Returns:
+            (float,np.array[complex]): minimum value, coefficients
+        """
+        O = Pauli_Hamiltonian.__p_overlap_elements__(circs)
+        M = self.__p_total_elements__(circs)
         L = np.linalg.cholesky(O+1e-14 * np.eye(len(O))).conjugate().T
 
         U = np.linalg.inv(L).conjugate().T @ M @ np.linalg.inv(L)
@@ -1123,7 +1221,7 @@ def extend_group(L, p_list,n):
                 L_new.append(s)
                 break 
             if(idx == 2**(len(space))-1 ):
-                fail == True 
+                fail = True 
         if(fail):
             break
     return L_new,fail
@@ -1169,3 +1267,138 @@ def LCSS_full(H,n):
     circs = get_circs(groups,phases,H)
     return H.LCSS_opt(circs),circs,groups
 
+def p_LCSS_full(H,n):
+    result,groups,phases,energies = get_excited_states(H.convert_to_spare_hamiltonian(),n)
+    circs = get_circs(groups,phases,H)
+    return H.p_LCSS_opt(circs),circs,groups
+
+
+##### Classical Methods
+from itertools import combinations
+from copy import deepcopy
+
+def is_Z(s):
+    return np.all(s[len(s)//2:] == 0)
+
+def bit_extend_group(L, p_list,n):
+    L_new = copy(L)
+    fail = False
+    while(len(L_new) < n):
+        space = __commuting_space__(stabilizer_group.__pauli_list_to_arr__(L_new)).T
+        space = [s for s in space if is_Z(s)]
+        for idx in range(1,2**(len(space))):
+            s = __bin_to_paulis__(__enumerate_span__(space,idx))
+            if(not __extra_overlap__(L_new,s,p_list) and __indepenent__(L_new,s)):
+                L_new.append(s)
+                break 
+            if(idx == 2**(len(space))-1 ):
+                fail = True 
+        if(fail):
+            break
+    return L_new,fail
+
+
+def get_bitstring(Z_list, signs):
+    bit_signs = (1 - np.array(signs,dtype=int))//2
+    matrix = np.zeros((len(Z_list), len(Z_list)))
+    for i in range(len(Z_list)):
+        for j in range(len(Z_list)):
+            matrix[i,j] = int(Z_list[i][j] == "Z")
+            
+    _,inv,r = __rref__(matrix)
+    assert r == len(Z_list) ##full rank!
+    return (inv @ bit_signs) % 2
+
+def get_energy(coeffs, Z_matrix,bitstring):
+    return np.dot(coeffs, (-1)**((Z_matrix @ bitstring ) % 2))
+
+def get_local_excitation_states(HZ,k,n_states):
+    assert k < len(HZ.paulis[0])//2
+    result, groups, phases, energies  = get_excited_states(HZ.convert_to_spare_hamiltonian(),1)
+    groups = bit_extend_group(groups[0],HZ.paulis,len(HZ.paulis[0]))
+    assert not groups[-1]
+    groups = groups[0]
+    coeffs = HZ.coeffs 
+    Z_list = groups
+    phases = np.concatenate([phases[0],np.ones(len(Z_list) - len(phases[0]))])
+    gs = get_bitstring(Z_list,phases)
+    
+    Z_matrix = np.zeros((len(HZ.paulis), len(Z_list)))
+    for i in range(len(HZ.paulis)):
+        for j in range(len(Z_list)):
+            Z_matrix[i,j] = int(HZ.paulis[i][j] == "Z")
+    
+    
+    states = [(get_energy(coeffs,Z_matrix,gs),gs)] 
+    
+    for i in range(1,k+1):
+        for combo in combinations(range(len(Z_list)), i):  
+            temp_state = deepcopy(gs)
+            temp_state[[combo]] +=1
+            temp_state %=2 
+
+            states.append((get_energy(coeffs,Z_matrix,temp_state),temp_state))
+
+    states.sort(key = lambda x: x[0])
+    return states[:n_states]
+
+def get_local_excitation_states_parallel(HZ, k, n_states, n_jobs=-1):
+    assert k < len(HZ.paulis[0]) // 2
+    result, groups, phases, energies = get_excited_states(HZ.convert_to_spare_hamiltonian(), 1)
+    groups = bit_extend_group(groups[0], HZ.paulis, len(HZ.paulis[0]))
+    assert not groups[-1]
+    groups = groups[0]
+    coeffs = HZ.coeffs
+    Z_list = groups
+    phases = np.concatenate([phases[0], np.ones(len(Z_list) - len(phases[0]))])
+    gs = get_bitstring(Z_list, phases)
+
+    Z_matrix = np.zeros((len(HZ.paulis), len(Z_list)))
+    for i in range(len(HZ.paulis)):
+        for j in range(len(Z_list)):
+            Z_matrix[i, j] = int(HZ.paulis[i][j] == "Z")
+
+    # Base states (ground state)
+    states = [(get_energy(coeffs, Z_matrix, gs), gs)]
+
+    def evaluate_state(combo):
+        temp_state = deepcopy(gs)
+        temp_state[list(combo)] += 1
+        temp_state %= 2
+        return [
+            (get_energy(coeffs, Z_matrix, temp_state), temp_state.copy())        ]
+
+    # Run in parallel
+    for i in range(1,k+1):
+        results = Parallel(n_jobs=n_jobs)(delayed(evaluate_state)(combo) for combo in combinations(range(len(Z_list)), i))
+
+        # Flatten results and append to states
+        for pair in results:
+            states.extend(pair)
+
+    states.sort(key=lambda x: x[0])
+    return states[:n_states]
+
+def bit_string_to_circ(bitstring):
+    circ = circuit_instruct(len(bitstring))
+    for i,v in enumerate(bitstring):
+        if(v):
+            circ.H(i)
+            circ.S(i)
+            circ.S(i)
+            circ.H(i)
+    return circ
+
+def LCBS(H,HZ,k,n_states):
+    states = get_local_excitation_states(HZ,k,n_states)
+    circs = [bit_string_to_circ(s[-1]) for s in states]
+    energy_matrix = H.__total_elements__(circs)
+    vals,vecs = np.linalg.eigh(energy_matrix)
+    return vals[0],vecs[:,0]
+
+def p_LCBS(H,HZ,k,n_states):
+    states = get_local_excitation_states_parallel(HZ,k,n_states)
+    circs = [bit_string_to_circ(s[-1]) for s in states]
+    energy_matrix = H.__p_total_elements__(circs)
+    vals,vecs = np.linalg.eigh(energy_matrix)
+    return vals[0],vecs[:,0]

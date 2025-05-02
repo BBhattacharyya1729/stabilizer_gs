@@ -1,4 +1,4 @@
-from LCSS_core import * 
+# from LCSS_core import * 
 import stim
 from qiskit import QuantumCircuit
 from qiskit.quantum_info import Operator
@@ -43,3 +43,16 @@ def circ_to_unitary(circ):
             c.cz(i[1],i[2])
     return Operator(c.reverse_bits()).data
 
+def to_matrix(H):
+    coeffs = H.coeffs 
+    paulis = [p for p in H.paulis]
+    l = []
+    for p in paulis:
+        s=""
+        for _ in p:
+            if _ != "_":
+                s+=_ 
+            else:
+                s+="I"
+        l.append(s)
+    return Operator(SparsePauliOp(coeffs=coeffs,data=l)).to_matrix()

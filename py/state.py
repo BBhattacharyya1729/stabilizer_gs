@@ -4,6 +4,7 @@ from pauli import Pauli
 from stab import StabilizerGroup, StabilizerGroupEnergies, is_in_group
 import tqdm
 
+
 type_index = tp.Tuple[int, int]
 tot_count = 0
 

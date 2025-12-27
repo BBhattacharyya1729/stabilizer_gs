@@ -4,9 +4,11 @@ import quimb.tensor as qtn
 import functools
 
 
-X = qu.spin_operator('X').real * 2
-Z = qu.spin_operator('Z').real * 2
+X = qu.spin_operator('X') * 2
+Y = qu.spin_operator('Y') * 2
+Z = qu.spin_operator('Z') * 2
 
+conv = {"X":X,"Y":Y,"Z":Z}
 def get_term(L, ps, sites):
     mpo = qtn.MatrixProductOperator.from_fill_fn(lambda shape: np.eye(2).reshape(shape), L, 1)
     for p, site in zip(ps, sites):
@@ -30,17 +32,24 @@ def convert_to_mpos(paulis,coeffs):
     L = len(paulis[0])
     mpos_single = []
     mpos_double = []
+    mpos_triple = []
     for (p,c) in zip(paulis,coeffs):
-        x_index = [i for i in range(len(p)) if p[i]=='X']
-        z_index = [i for i in range(len(p)) if p[i]=='Z']
-        assert len(x_index) == 2 or len(z_index) == 1
-        if(len(x_index) == 2):
-            term = get_term(L, (X, X), (x_index[0], x_index[1]))
-            mpos_single.append(c * term)
-        else:
-            term =  get_term(L, [Z], (z_index[0], ))
+        data = [(i,x) for i,x in enumerate(p) if x != '_']
+        if(len(data) == 3):
+            term = get_term(L, [conv[d[1]] for d in data], [d[0] for d in data])
+            mpos_triple.append(c * term)
+        elif(len(data) == 2):
+            term = get_term(L, [conv[d[1]] for d in data], [d[0] for d in data])
             mpos_double.append(c * term)
-    return combine_mpos(mpos_single)[0] + combine_mpos(mpos_double)[0]
+        else:
+            term = get_term(L, [conv[d[1]] for d in data], [d[0] for d in data])
+            mpos_single.append(c * term)
+
+    if(len(mpos_triple)==0):
+        return (combine_mpos(mpos_single)[0] + combine_mpos(mpos_double)[0]) 
+    else:
+        return (combine_mpos(mpos_single)[0] + combine_mpos(mpos_triple)[0])
+
 
 def run_dmrg(mpos,D):
     dmrg = qtn.DMRG2(mpos, bond_dims=D, cutoffs=1e-10)

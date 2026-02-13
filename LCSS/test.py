@@ -1,5 +1,8 @@
 from LCSS_new import *
+import matplotlib.pyplot as plt 
 import time
+from joblib import Parallel, delayed
+import multiprocessing
 np.random.seed(42)
 
 H = Pauli_Hamiltonian.TI_local_H(["XX","Z"],20)
@@ -16,23 +19,70 @@ print(f"State Generation Time: {t1-t}")
 
 N_states = len(states)
 t = time.time()
-O = np.eye(N_states,dtype=complex)
-for i in range(0,N_states):
-    for j in range(i+1,N_states):
-        O[i,j] = triple.inner(triples[i], triples[j])
-        O[j,i] = O[i,j].conjugate()
+def compute_overlap_row(i, triples, N_states):
+    row = np.zeros(N_states, dtype=np.complex128)
+    ti = triples[i]
+    for j in range(i+1, N_states):
+        row[j] = triple.inner(ti, triples[j])
+    return i, row
+
+n_jobs = multiprocessing.cpu_count()
+
+results = Parallel(
+    n_jobs=n_jobs,
+    backend="loky",
+    batch_size=1
+)(
+    delayed(compute_overlap_row)(i, triples, N_states)
+    for i in range(N_states)
+)
+
+O = np.eye(N_states, dtype=np.complex128)
+
+for i, row in results:
+    O[i, i+1:] = row[i+1:]
+    O[i+1:, i] = row[i+1:].conjugate()
 t1 = time.time()
 print(f"Overlap Generation Time: {t1-t}")
 
 t = time.time()
 new_states= [[t.apply_pauli(p) for p in instance.H.paulis] for t in triples]
-M = np.eye(N_states,dtype=complex)
-for i in range(N_states):
-    M[i,i] = np.dot(instance.H.coeffs,[pauli_expect(p, states[i]) for p in instance.H.paulis])
-    for j in range(i+1,N_states):
-        M[i,j] = np.dot(instance.H.coeffs,[c*triple.inner(triples[i],t) for (c,t) in (new_states[j])])
-        M[j,i] = M[i,j].conjugate() 
-t1 = time.time()
+def compute_energy_row(i, triples, new_states, states, H, N_states):
+    row = np.zeros(N_states, dtype=np.complex128)
+
+    # Diagonal term
+    row[i] = np.dot(
+        H.coeffs,
+        [pauli_expect(p, states[i]) for p in H.paulis]
+    )
+
+    # Off-diagonal
+    ti = triples[i]
+    for j in range(i+1, N_states):
+        val = np.dot(
+            H.coeffs,
+            [c * triple.inner(ti, t) for (c, t) in new_states[j]]
+        )
+        row[j] = val
+
+    return i, row
+
+results_M = Parallel(
+    n_jobs=n_jobs,
+    backend="loky",
+    batch_size=1
+)(
+    delayed(compute_energy_row)(
+        i, triples, new_states, states, instance.H, N_states
+    )
+    for i in range(N_states)
+)
+
+M = np.zeros((N_states, N_states), dtype=np.complex128)
+
+for i, row in results_M:
+    M[i, i:] = row[i:]
+    M[i:, i] = row[i:].conjugate()
 print(f"Energy Generation Time: {t1-t}")
 print("--------------------------")
 
@@ -72,9 +122,9 @@ energies_Z = np.array(energies_Z)[increases_Z]
 
 g = run_dmrg(convert_to_mpos(H.paulis,H.coeffs),50)
 
-
-import matplotlib.pyplot as plt 
 plt.plot(np.abs((energies-g)/g),label='Stabilizer')
 plt.plot(np.abs((energies_Z-g)/g),label='Computational')
 plt.savefig("Test_Plot.pdf",dpi=200)
+plt.legend()
+plt.grid(alpha=0.2)
 print("Plot Saved")

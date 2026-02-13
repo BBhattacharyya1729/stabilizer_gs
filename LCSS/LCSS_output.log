@@ -1,1 +1,15 @@
-[2026-02-12T21:13:51.423] error: *** JOB 60579635 ON hpc-25-04 CANCELLED AT 2026-02-12T21:13:51 DUE to SIGNAL Terminated ***
+[2026-02-12T22:23:13.907] error: *** JOB 60582128 ON hpc-93-07 CANCELLED AT 2026-02-12T22:23:13 DUE to SIGNAL Terminated ***
+LCSS States
+--------------------------
+State Generation Time: 12.058971643447876
+Overlap Generation Time: 14.336162090301514
+Energy Generation Time: 485.4817624092102
+--------------------------
+Classical States
+--------------------------
+State Generation Time: 6.827561140060425
+State Generation Time: 0.0030143260955810547
+State Generation Time: 0.07038521766662598
+--------------------------
+Post Proccessing
+Plot Saved

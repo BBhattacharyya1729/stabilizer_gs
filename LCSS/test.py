@@ -3,7 +3,7 @@ import time
 np.random.seed(42)
 
 H = Pauli_Hamiltonian.TI_local_H(["XX","Z"],20)
-N  = 250
+N  = 50
 instance = LCSS(H)
 
 print("LCSS States")

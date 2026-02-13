@@ -6,7 +6,7 @@ import multiprocessing
 np.random.seed(42)
 
 H = Pauli_Hamiltonian.TI_local_H(["XX","Z"],20)
-N  = 50
+N  = 200
 instance = LCSS(H)
 
 print("LCSS States")
@@ -83,6 +83,7 @@ M = np.zeros((N_states, N_states), dtype=np.complex128)
 for i, row in results_M:
     M[i, i:] = row[i:]
     M[i:, i] = row[i:].conjugate()
+t1 = time.time()
 print(f"Energy Generation Time: {t1-t}")
 print("--------------------------")
 

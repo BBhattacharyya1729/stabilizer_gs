@@ -6,7 +6,7 @@ import multiprocessing
 np.random.seed(42)
 
 H = Pauli_Hamiltonian.TI_local_H(["XX","Z"],20)
-N  = 200
+N  = 500
 instance = LCSS(H)
 
 print("LCSS States")
